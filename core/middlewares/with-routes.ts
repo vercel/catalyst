@@ -1,15 +1,16 @@
-import { NextFetchEvent, NextRequest, NextResponse } from 'next/server';
+/* eslint-disable no-console */
+import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { getSessionCustomerAccessToken } from '~/auth';
 import { client } from '~/client';
 import { graphql } from '~/client/graphql';
 import { revalidate } from '~/client/revalidate-target';
-import { kvKey, STORE_STATUS_KEY } from '~/lib/kv/keys';
-
-import { kv } from '../lib/kv';
+import { ComputeCache, getComputeCache } from '~/lib/vdc';
 
 import { type MiddlewareFactory } from './compose-middlewares';
+
+const STORE_STATUS_KEY = 'storeStatus';
 
 const GetRouteQuery = graphql(`
   query getRoute($path: String!) {
@@ -116,12 +117,10 @@ type StorefrontStatusType = ReturnType<typeof graphql.scalar<'StorefrontStatusTy
 
 interface RouteCache {
   route: Route;
-  expiryTime: number;
 }
 
 interface StorefrontStatusCache {
   status: StorefrontStatusType;
-  expiryTime: number;
 }
 
 const StorefrontStatusCacheSchema = z.object({
@@ -131,7 +130,6 @@ const StorefrontStatusCacheSchema = z.object({
     z.literal('MAINTENANCE'),
     z.literal('PRE_LAUNCH'),
   ]),
-  expiryTime: z.number(),
 });
 
 const RedirectSchema = z.object({
@@ -162,27 +160,25 @@ const RouteSchema = z.object({
 
 const RouteCacheSchema = z.object({
   route: z.nullable(RouteSchema),
-  expiryTime: z.number(),
 });
 
 const updateRouteCache = async (
   pathname: string,
   channelId: string,
-  event: NextFetchEvent,
+  computeCache: ComputeCache<RouteCache | StorefrontStatusCache>,
 ): Promise<RouteCache> => {
   const routeCache: RouteCache = {
     route: await getRoute(pathname, channelId),
-    expiryTime: Date.now() + 1000 * 60 * 30, // 30 minutes
   };
 
-  event.waitUntil(kv.set(kvKey(pathname, channelId), routeCache));
+  await computeCache.set(`${pathname}:${channelId}`, routeCache, { revalidate: 60 * 30 });
 
   return routeCache;
 };
 
 const updateStatusCache = async (
   channelId: string,
-  event: NextFetchEvent,
+  computeCache: ComputeCache<RouteCache | StorefrontStatusCache>,
 ): Promise<StorefrontStatusCache> => {
   const status = await getStoreStatus(channelId);
 
@@ -192,10 +188,9 @@ const updateStatusCache = async (
 
   const statusCache: StorefrontStatusCache = {
     status,
-    expiryTime: Date.now() + 1000 * 60 * 5, // 5 minutes
   };
 
-  event.waitUntil(kv.set(kvKey(STORE_STATUS_KEY, channelId), statusCache));
+  await computeCache.set(`${STORE_STATUS_KEY}:${channelId}`, statusCache, { revalidate: 60 * 5 });
 
   return statusCache;
 };
@@ -208,30 +203,25 @@ const clearLocaleFromPath = (path: string, locale: string) => {
   return path;
 };
 
-const getRouteInfo = async (request: NextRequest, event: NextFetchEvent) => {
+const getRouteInfo = async (request: NextRequest) => {
+  const computeCache = await getComputeCache<RouteCache | StorefrontStatusCache>(request);
+
   const locale = request.headers.get('x-bc-locale') ?? '';
   const channelId = request.headers.get('x-bc-channel-id') ?? '';
 
   try {
     const pathname = clearLocaleFromPath(request.nextUrl.pathname, locale);
 
-    let [routeCache, statusCache] = await kv.mget<RouteCache | StorefrontStatusCache>(
-      kvKey(pathname, channelId),
-      kvKey(STORE_STATUS_KEY, channelId),
-    );
+    let statusCache = await computeCache.get(`${STORE_STATUS_KEY}:${channelId}`);
 
-    // If caches are old, update them in the background and return the old data (SWR-like behavior)
-    // If cache is missing, update it and return the new data, but write to KV in the background
-    if (statusCache && statusCache.expiryTime < Date.now()) {
-      event.waitUntil(updateStatusCache(channelId, event));
-    } else if (!statusCache) {
-      statusCache = await updateStatusCache(channelId, event);
+    if (!statusCache) {
+      statusCache = await updateStatusCache(channelId, computeCache);
     }
 
-    if (routeCache && routeCache.expiryTime < Date.now()) {
-      event.waitUntil(updateRouteCache(pathname, channelId, event));
-    } else if (!routeCache) {
-      routeCache = await updateRouteCache(pathname, channelId, event);
+    let routeCache = await computeCache.get(`${pathname}:${channelId}`);
+
+    if (!routeCache) {
+      routeCache = await updateRouteCache(pathname, channelId, computeCache);
     }
 
     const parsedRoute = RouteCacheSchema.safeParse(routeCache);
@@ -242,7 +232,6 @@ const getRouteInfo = async (request: NextRequest, event: NextFetchEvent) => {
       status: parsedStatus.success ? parsedStatus.data.status : undefined,
     };
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error(error);
 
     return {
@@ -253,10 +242,9 @@ const getRouteInfo = async (request: NextRequest, event: NextFetchEvent) => {
 };
 
 export const withRoutes: MiddlewareFactory = () => {
-  return async (request, event) => {
+  return async (request) => {
     const locale = request.headers.get('x-bc-locale') ?? '';
-
-    const { route, status } = await getRouteInfo(request, event);
+    const { route, status } = await getRouteInfo(request);
 
     if (status === 'MAINTENANCE') {
       // 503 status code not working - https://github.com/vercel/next.js/issues/50155
