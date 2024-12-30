@@ -212,17 +212,22 @@ const getRouteInfo = async (request: NextRequest) => {
   try {
     const pathname = clearLocaleFromPath(request.nextUrl.pathname, locale);
 
-    let statusCache = await computeCache.get(`${STORE_STATUS_KEY}:${channelId}`);
+    const [statusCache, routeCache] = await Promise.all([
+      computeCache.get(`${STORE_STATUS_KEY}:${channelId}`).then(async (cache) => {
+        if (!cache) {
+          return updateStatusCache(channelId, computeCache);
+        }
 
-    if (!statusCache) {
-      statusCache = await updateStatusCache(channelId, computeCache);
-    }
+        return cache;
+      }),
+      computeCache.get(`${pathname}:${channelId}`).then(async (cache) => {
+        if (!cache) {
+          return updateRouteCache(pathname, channelId, computeCache);
+        }
 
-    let routeCache = await computeCache.get(`${pathname}:${channelId}`);
-
-    if (!routeCache) {
-      routeCache = await updateRouteCache(pathname, channelId, computeCache);
-    }
+        return cache;
+      }),
+    ]);
 
     const parsedRoute = RouteCacheSchema.safeParse(routeCache);
     const parsedStatus = StorefrontStatusCacheSchema.safeParse(statusCache);
