@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-/* eslint-disable @typescript-eslint/no-confusing-void-expression */
+
 /* eslint-disable @typescript-eslint/consistent-type-assertions */
 /* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable no-multi-assign */
@@ -11,11 +11,7 @@ import { CachedRouteKind, CacheHandler, CacheHandlerContext, IncrementalCacheKin
 
 export interface ComputeCache<T> {
   get: (key: string) => Promise<T | undefined>;
-  set: (
-    key: string,
-    value: any,
-    options?: { tags?: string[]; revalidate?: number },
-  ) => Promise<void>;
+  set: (key: string, value: any, options?: { tags?: string[]; revalidate?: number }) => Promise<T>;
   revalidateTag: (tag: string) => Promise<void>;
 }
 
@@ -68,7 +64,8 @@ export async function getComputeCache<T>(
     },
     set: async (key: string, value: any, options?: { tags?: string[]; revalidate?: number }) => {
       const fullKey = getKey(key);
-      const r = await internalCache.set(
+
+      await internalCache.set(
         fullKey,
         {
           kind: CachedRouteKind.FETCH,
@@ -103,7 +100,7 @@ export async function getComputeCache<T>(
         internalCache.resetRequestCache();
       }
 
-      return r;
+      return value;
     },
     revalidateTag: (tag: string | string[]) => {
       const r = internalCache.revalidateTag(tag);
