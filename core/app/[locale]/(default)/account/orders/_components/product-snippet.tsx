@@ -1,12 +1,12 @@
 import { getFormatter, getTranslations } from 'next-intl/server';
 
+import { Price as PricesType } from '@/vibes/soul/primitives/price-label';
 import { client } from '~/client';
 import { graphql, ResultOf, VariablesOf } from '~/client/graphql';
 import { revalidate } from '~/client/revalidate-target';
 import { Image } from '~/components/image';
 import { Link } from '~/components/link';
 import { ProductCardFragment } from '~/components/product-card/fragment';
-import { Price as PricesType } from '~/components/ui/product-card';
 import { pricesTransformer } from '~/data-transformers/prices-transformer';
 import { cn } from '~/lib/utils';
 
@@ -44,6 +44,8 @@ export const OrderItemFragment = graphql(`
     }
   }
 `);
+
+export type OrderItemFragmentType = ResultOf<typeof OrderItemFragment>;
 
 export type ProductSnippetFragment = Omit<
   ResultOf<typeof ProductCardFragment>,
@@ -97,7 +99,7 @@ export const assembleProductData = (orderItem: ResultOf<typeof OrderItemFragment
 };
 
 const Price = async ({ price }: { price?: PricesType }) => {
-  const t = await getTranslations('Product.Details.Prices');
+  const t = await getTranslations('Product.ProductDetails.Prices');
 
   if (!price) {
     return;
@@ -149,7 +151,7 @@ export const ProductSnippet = async ({
 }: Props) => {
   const { name, defaultImage, brand, productId, prices } = product;
   const format = await getFormatter();
-  const t = await getTranslations('Product.Details');
+  const t = await getTranslations('Product.ProductDetails');
   const price = pricesTransformer(prices, format);
   const isImageAvailable = defaultImage !== null;
 
@@ -214,7 +216,7 @@ export const ProductSnippet = async ({
                   );
                 })}
                 <p className="flex gap-1 text-xs">
-                  <span>{t('qty')}:</span>
+                  <span>{t('quantity')}:</span>
                   <span className="font-semibold">{product.quantity}</span>
                 </p>
               </div>
